@@ -98,11 +98,12 @@ experiments/
 *.json
 *.csv
 
-# Paper build artifacts
-*.pdf
+# Paper build artifacts (keep PDF, exclude source)
 *.aux
 *.bbl
 *.blg
 *.synctex.gz
 *.fls
 *.fdb_latexmk
+*.tex
+*.toc

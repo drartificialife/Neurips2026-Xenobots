@@ -1,165 +1,136 @@
-# Language-Guided Biological Control via Offline Learning (Neurips 2026)
+# Language-Guided Biological Control via Offline Learning
 
-This repository contains code and analysis for "Decoding Language that Organoids Obey: Bridging Language and Biology with Foundation Models."
+This repository contains code for training and evaluating a Prompt-to-Intervention (P2I) network that translates natural language descriptions into biological interventions.
 
 ## Overview
 
-We demonstrate how to translate natural language prompts into biological interventions for in-vitro motile organoids (xenobots) using offline learning from archived intervention-outcome pairs, without any new experiments.
+We demonstrate that a policy network can learn to map natural language prompts to biological interventions using only archived intervention-outcome video data, without any new experiments. The approach uses:
 
-**Key contributions:**
-1. **Offline learning framework** that leverages fixed archives of intervention-outcome videos
-2. **VLM-based reward signals** using vision-language models as zero-shot evaluators  
-3. **Multi-head architecture** that resolves objective interference between opposing behavioral goals
+1. **Prompt encoding** (SentenceBERT) to convert text to fixed representations
+2. **Multi-head P2I network** with shared backbone and behavior-specific output heads
+3. **CMA-ES optimization** with vision-language model rewards
+4. **Offline learning** from fixed video archives
 
-**Results:** 
-- 6 of 8 behaviors significantly improve over random-retrieval baseline
-- GT1 (novel prompts, training batches): 0.844 average performance
-- GT2 (novel prompts, novel batches): 0.627 average performance
-- Multi-head achieves 4-5× improvement on hard behaviors vs single-head
+**Key result**: Multi-head architecture achieves 66% average improvement over single-head baseline through decoupled optimization of conflicting behavioral objectives.
 
 ## Quick Start
 
-### Requirements
-- Python 3.9+
-- PyTorch 2.0+
-- SBERT for embeddings
-- CMA-ES for optimization
+### Installation
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### Core Training Script
+### Training
+
+Train a multi-head P2I network:
 
 ```bash
-# Train multi-head P2I network with CMA-ES (30 seeds)
-python evolution/train_test_split/evolve_multi_prompt.py \
-    --num_behaviors 8 \
-    --population_size 32 \
+python scripts/train_multihead.py \
+    --behaviors 8 \
+    --population 32 \
     --generations 100 \
-    --num_seeds 30
+    --seeds 30
 ```
 
 ### Evaluation
 
+Evaluate generalization on held-out data:
+
 ```bash
-# Run generalization tests (GT1 and GT2)
-python evolution/train_test_split/compute_test_scores_vlm.py \
-    --checkpoint path/to/trained_model.pth \
-    --eval_protocol both
+python scripts/evaluate_generalization.py checkpoints/multihead_seed_00.pth --protocol both
 ```
 
-### Analysis & Figures
+### Using Pre-trained Model
 
-See notebooks in `paper/experiment/`:
-- `cmaes_8behavior.ipynb` - Training dynamics
-- `generalization_test_cmaes.ipynb` - GT1/GT2 evaluation
-- `analysis_results.ipynb` - Statistical analysis
+```python
+import torch
+from src.p2i_network import P2INetwork, PromptEncoder
 
-## Dataset
+# Load checkpoint
+checkpoint = torch.load("checkpoints/multihead_cmaes_30seeds.pth")
+network = P2INetwork()
+network.load_state_dict(checkpoint['model_state_dict'])
 
-The xenobot intervention-outcome archive (143 videos) is available upon request with institutional approval:
-- **143 total batches:** 99 training, 44 test
-- **Collection period:** October 2025 – January 2026
-- **Video specs:** 30 fps, 1280×960 resolution, pre- and post-intervention phases
-- **Interventions:** Electrical stimulation (current, frequency, duration, angle)
-- **Behaviors:** 8 motion-related phenotypes (stop, motion_increase, vigor, etc.)
+# Encode a prompt
+encoder = PromptEncoder()
+embedding = encoder.encode("move faster")
 
-To access: Contact the authors or see institutional data policies.
+# Get intervention predictions
+with torch.no_grad():
+    intervention = network(embedding.unsqueeze(0))
+print(f"Intervention duration per behavior: {intervention}")
+```
 
 ## Architecture
 
-### P2I Network (Prompt-to-Intervention)
+### P2I Network
 
 ```
-Input: Natural language prompt
+Input: Natural language prompt (string)
   ↓
-SentenceBERT embedding (384-dim)
+SentenceBERT embedding (384-dim vector)
   ↓
-Shared CNN Backbone (Conv1d cascade: 384→64→32→16)
+Shared CNN Backbone (Conv1d: 384→64→32→16)
   ↓
-Multi-head architecture: 8 independent FC heads
+Multi-head outputs: 8 independent FC heads
   ↓
 Output: Intervention duration [0,1] per behavior
 ```
 
-**Parameters:**
-- Shared backbone: 81,520 params
-- Per-head: 577 params × 8 = 4,616 params
-- Total: 86,136 params
+**Parameters**:
+- Shared backbone: 81,520 parameters
+- Per-head: 577 parameters
+- Total (multi-head): 86,136 parameters
+- Total (single-head baseline): 81,577 parameters
 
 ### Optimization
 
-- **Algorithm:** CMA-ES (Covariance Matrix Adaptation Evolution Strategy)
-- **Variant:** Separable CMA-ES (sep-CMA-ES) for O(n) memory
-- **Population:** 32
-- **Generations:** 100
-- **Fitness:** Mean VLM score across training prompts
-
-### Reward Signal
-
-Vision-Language Model (Qwen3.5-397B) scores behavior-prompt alignment:
-1. Compute optical flow pre- and post-intervention
-2. Generate motion heatmap visualization
-3. Query VLM: "Does this xenobot behavior match the prompt?"
-4. Output: Alignment score [0,1]
-
-## File Structure
-
-```
-.
-├── evolution/
-│   └── train_test_split/
-│       ├── evolve_multi_prompt.py      # Main multi-head training
-│       ├── evolve_single_head.py        # Single-head baseline
-│       ├── compute_test_scores_vlm.py   # GT1/GT2 evaluation
-│       └── plot_training_comparison.py  # Training curves
-├── paper/
-│   ├── neurips_2026.tex                 # Main paper
-│   ├── checklist.tex                    # NeurIPS reproducibility checklist
-│   └── experiment/
-│       ├── cmaes_8behavior.ipynb        # Training analysis
-│       ├── generalization_test_cmaes.ipynb # Generalization tests
-│       └── analysis_results.ipynb       # Statistical analysis
-├── video_preprocessing/
-│   └── generate_motion_heatmap.py       # Optical flow pipeline
-├── requirements.txt
-├── .gitignore
-└── README.md (this file)
-```
+- **Algorithm**: CMA-ES (Covariance Matrix Adaptation Evolution Strategy)
+- **Variant**: Separable CMA-ES for O(n) memory complexity
+- **Population size**: λ = 32
+- **Generations**: 100
+- **Mutation strength**: σ₀ = 0.3
+- **Reward signal**: Vision-language model alignment scores
 
 ## Reproducibility
 
 ### Key Hyperparameters
-- CMA-ES population size: 32
-- Initial mutation strength (σ₀): 0.3
-- Number of generations: 100
-- SBERT model: all-MiniLM-L6-v2 (384-dim)
-- VLM model: Qwen3.5-397B (via Ollama Cloud)
+
+| Parameter | Value |
+|-----------|-------|
+| SBERT model | all-MiniLM-L6-v2 |
+| Population size | 32 |
+| Generations | 100 |
+| Initial mutation | 0.3 |
+| Dropout rate | 0.2 |
+| Conv kernel size | 3 |
+| Random seeds | 30 |
 
 ### Compute Requirements
-- **Hardware:** Intel i9-14900KF (24 cores, 128GB RAM) or similar
-- **Training time:** ~15 hours wall-clock (30 seeds × 30 min each)
-- **VLM scoring:** Cloud-based (Ollama API, ~4 parallel workers)
-- **GPU:** Not required (CPU-only)
 
-### Reproducibility Checklist
-- ✅ Complete hyperparameter specification (Appendix B)
-- ✅ Data splits documented (99 train, 44 test batches)
-- ✅ Prompt sets listed (40 training + 40 test, Appendix E)
-- ✅ Statistical methods (Wilcoxon, Cohen's d, Appendix C)
-- ✅ Ablation studies (single-head vs multi-head, Appendix A.1)
-- ✅ Per-behavior generalization statistics (Appendix F)
+- **Hardware**: Intel i9-14900KF (24 cores, 128GB RAM) or equivalent
+- **Training time**: ~15 hours total (30 seeds)
+- **Per-seed time**: ~30 minutes
+- **GPU**: Not required (CPU-only)
+- **VLM scoring**: Cloud-based (Ollama API, ~4 parallel workers)
 
-## Results Summary
+### Dataset Access
 
-### Multi-Head vs Single-Head (on training batches, GT1)
+The video archive (143 xenobot videos) is available upon request.
+See [DATA_ACCESS.md](DATA_ACCESS.md) for information on how to request access.
+
+## Results
+
+### Performance Comparison
+
+Multi-head architecture vs. single-head baseline (on training batches):
 
 | Behavior | Baseline | Single-Head | Multi-Head | Improvement |
 |----------|----------|-------------|-----------|-------------|
 | stop | 0.750 | 0.937 | 0.955 | +27.3% |
 | motion_reduction | 0.763 | 0.872 | 0.967 | +26.7% |
-| motion_increase | 0.140 | 0.674 | 0.926 | +560% |
+| motion_increase | 0.140 | 0.674 | 0.926 | +561% |
 | vigor | 0.156 | 0.254 | 0.833 | +434% |
 | response_magnitude | 0.768 | 0.958 | 0.997 | +29.8% |
 | directedness | 0.148 | 0.216 | 0.815 | +450% |
@@ -167,43 +138,54 @@ Vision-Language Model (Qwen3.5-397B) scores behavior-prompt alignment:
 | elimination | 0.702 | 0.666 | 0.955 | +36.0% |
 | **Mean** | **0.559** | **0.647** | **0.927** | **+66%** |
 
-### Generalization (GT2: Novel Prompts × Novel Batches)
-- 6 of 8 behaviors maintain significant improvements
-- motion_reduction, confinement show distribution shift effects
-- Hard behaviors (vigor, directedness, motion_increase) sustain 100%+ improvements
+### Generalization Tests
+
+- **GT1** (novel prompts, training batches): 0.844 ± 0.015
+- **GT2** (novel prompts, novel batches): 0.627 ± 0.052
+
+## File Structure
+
+```
+.
+├── README.md                          # This file
+├── requirements.txt                   # Python dependencies
+├── DATA_ACCESS.md                     # How to access video data
+├── paper/
+│   ├── neurips_2026.pdf              # Published paper
+│   └── figures/                       # Paper figures
+├── src/
+│   ├── __init__.py
+│   ├── p2i_network.py                # Multi-head P2I network
+│   ├── vlm_scorer.py                 # VLM reward interface
+│   └── cmaes_optimizer.py            # CMA-ES trainer (optional)
+├── scripts/
+│   ├── train_multihead.py            # Main training script
+│   ├── evaluate_generalization.py    # GT1/GT2 evaluation
+│   └── download_pretrained.sh        # Download pre-trained weights
+└── checkpoints/
+    └── README.md                     # Checkpoint instructions
+```
 
 ## Citation
 
+If you use this code, please cite the published work:
+
 ```bibtex
-@article{le2026decoding,
+@article{decoding2026,
   title={Decoding Language that Organoids Obey: Bridging Language and Biology with Foundation Models},
-  author={Le, Nam and Blackiston, Douglas and Levin, Michael and Bongard, Josh},
   journal={Advances in Neural Information Processing Systems (NeurIPS)},
   year={2026}
 }
 ```
 
-## Broader Impact
-
-This work enables natural language control of biological systems, lowering barriers for non-expert researchers. Potential benefits include:
-- Drug delivery optimization
-- Biological material synthesis
-- Microplastic remediation
-
-Key risks:
-- Non-experts may not recognize unintended consequences
-- Misuse potential for creating destructive interventions
-
-**Safeguards:** System retrieves only from fixed archive; cannot generate novel interventions.
-
 ## License
 
-[To be determined upon acceptance]
+[To be determined upon publication]
 
-## Contact
+## Acknowledgments
 
-For questions or data access requests, contact the authors or submit an issue.
+We thank the collaborators who provided the xenobot video archive and valuable feedback throughout this research.
 
 ---
 
-Generated for NeurIPS 2026 submission. Updated: June 2026.
+For questions or issues, please open a GitHub issue or contact the corresponding author.
